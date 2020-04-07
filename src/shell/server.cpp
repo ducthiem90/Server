@@ -114,15 +114,16 @@ struct server::impl
     impl& operator=(const impl&) = delete;
 
     explicit impl(std::function<void(bool)> shutdown_server_now)
-        : accelerator_(env::properties().get(L"configuration.accelerator", L"auto"))
+        : accelerator_()
         , producer_registry_(spl::make_shared<core::frame_producer_registry>())
         , consumer_registry_(spl::make_shared<core::frame_consumer_registry>())
         , shutdown_server_now_(std::move(shutdown_server_now))
     {
         caspar::core::diagnostics::osd::register_sink();
 
+        auto ogl_device    = accelerator_.get_device();
         amcp_command_repo_ = spl::make_shared<amcp::amcp_command_repository>(
-            cg_registry_, producer_registry_, consumer_registry_, shutdown_server_now_);
+            cg_registry_, producer_registry_, consumer_registry_, ogl_device, shutdown_server_now_);
 
         module_dependencies dependencies(cg_registry_, producer_registry_, consumer_registry_, amcp_command_repo_);
 
@@ -265,14 +266,22 @@ struct server::impl
 
             if (name == L"tcp") {
                 auto port              = ptree_get<unsigned int>(xml_controller.second, L"port");
-                auto asyncbootstrapper = spl::make_shared<IO::AsyncEventServer>(
-                    io_service_,
-                    create_protocol(protocol, L"TCP Port " + std::to_wstring(port)),
-                    static_cast<short>(port));
-                async_servers_.push_back(asyncbootstrapper);
 
-                if (!primary_amcp_server_ && boost::iequals(protocol, L"AMCP"))
-                    primary_amcp_server_ = asyncbootstrapper;
+                try {
+                    auto asyncbootstrapper = spl::make_shared<IO::AsyncEventServer>(
+                        io_service_,
+                        create_protocol(protocol, L"TCP Port " + std::to_wstring(port)),
+                        static_cast<short>(port));
+                    async_servers_.push_back(asyncbootstrapper);
+
+                    if (!primary_amcp_server_ && boost::iequals(protocol, L"AMCP"))
+                        primary_amcp_server_ = asyncbootstrapper;
+                } catch (...) {
+                    CASPAR_LOG(fatal) << L"Failed to setup " << protocol << L" controller on port "
+                                      << boost::lexical_cast<std::wstring>(port) << L". It is likely already in use";
+                    throw;
+                    //CASPAR_LOG_CURRENT_EXCEPTION();
+                }
             } else
                 CASPAR_LOG(warning) << "Invalid controller: " << name;
         }
