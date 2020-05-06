@@ -38,7 +38,7 @@
 
 namespace caspar { namespace core {
 
-typedef decltype(std::chrono::high_resolution_clock::now()) time_point_t;
+using time_point_t = decltype(std::chrono::high_resolution_clock::now());
 
 struct output::impl
 {
@@ -75,12 +75,8 @@ struct output::impl
     bool remove(int index)
     {
         std::lock_guard<std::mutex> lock(consumers_mutex_);
-        auto                        it = consumers_.find(index);
-        if (it != consumers_.end()) {
-            consumers_.erase(it);
-            return true;
-        }
-        return false;
+        auto                        count = consumers_.erase(index);
+        return count > 0;
     }
 
     bool remove(const spl::shared_ptr<frame_consumer>& consumer) { return remove(consumer->index()); }
@@ -122,35 +118,44 @@ struct output::impl
 
         std::map<int, std::future<bool>> futures;
 
-        for (auto it = consumers_.begin(); it != consumers_.end();) {
+        for (auto it = consumers.begin(); it != consumers.end();) {
             try {
                 futures.emplace(it->first, it->second->send(input_frame));
                 ++it;
             } catch (...) {
                 CASPAR_LOG_CURRENT_EXCEPTION();
-                it = consumers_.erase(it);
+                it = consumers.erase(it);
+
+                std::lock_guard<std::mutex> lock(consumers_mutex_);
+                consumers_.erase(it->first);
             }
         }
 
         for (auto& p : futures) {
             try {
                 if (!p.second.get()) {
+                    consumers.erase(p.first);
+
+                    std::lock_guard<std::mutex> lock(consumers_mutex_);
                     consumers_.erase(p.first);
                 }
             } catch (...) {
                 CASPAR_LOG_CURRENT_EXCEPTION();
+                consumers.erase(p.first);
+
+                std::lock_guard<std::mutex> lock(consumers_mutex_);
                 consumers_.erase(p.first);
             }
         }
 
         monitor::state state;
-        for (auto& p : consumers_) {
+        for (auto& p : consumers) {
             state["port"][p.first] = p.second->state();
         }
         state_ = std::move(state);
 
         const auto needs_sync = std::all_of(
-            consumers_.begin(), consumers_.end(), [](auto& p) { return !p.second->has_synchronization_clock(); });
+            consumers.begin(), consumers.end(), [](auto& p) { return !p.second->has_synchronization_clock(); });
 
         if (needs_sync) {
             if (!time) {
@@ -164,7 +169,7 @@ struct output::impl
         }
     }
 
-    std::wstring print() const { return L"output[" + boost::lexical_cast<std::wstring>(channel_index_) + L"]"; }
+    std::wstring print() const { return L"output[" + std::to_wstring(channel_index_) + L"]"; }
 };
 
 output::output(spl::shared_ptr<diagnostics::graph> graph, const video_format_desc& format_desc, int channel_index)

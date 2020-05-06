@@ -2,8 +2,6 @@
 
 #include <common/diagnostics/graph.h>
 
-#include <boost/optional.hpp>
-
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -36,6 +34,7 @@ class Input
     AVFormatContext* const operator->() const;
 
     void reset();
+    void abort();
     bool eof() const;
     void seek(int64_t ts, bool flush = true);
 
